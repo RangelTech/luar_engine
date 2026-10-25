@@ -10,6 +10,7 @@ if [ ! -s "$model" ]; then
 fi
 
 # Static health response; inference itself remains internal-only in the stack.
+mkdir -p /srv/public/v1
 printf '{"object":"list","data":[]}' > /srv/public/v1/models
 exec whisper-server --host 0.0.0.0 --port 8080 --threads 3 --language pt \
   --convert --public /srv/public --model "$model"
