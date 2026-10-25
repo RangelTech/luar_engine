@@ -1,13 +1,11 @@
 #!/bin/sh
 set -eu
 
-# The quantized model is cached on the persistent /models volume. It is never
-# downloaded per request and this container never uses a GPU.
+# The quantized model is baked into the signed release artifact, then cached on
+# the persistent /models volume. Runtime makes no external request and uses no GPU.
 model=/models/ggml-small-q5_1.bin
 if [ ! -s "$model" ]; then
-  curl -fL --retry 3 --connect-timeout 20 \
-    -o "$model.part" \
-    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
+  cp /opt/rt-whisper/models/ggml-small-q5_1.bin "$model.part"
   mv "$model.part" "$model"
 fi
 
