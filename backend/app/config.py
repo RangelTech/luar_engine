@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     bridge_url: str = ""
     bridge_admin_token: str = ""
 
+    # Reserva CPU do ditado (Spec 12). Vazia em desenvolvimento: o browser
+    # continua sendo o caminho primário e nenhuma chamada externa é feita.
+    whisper_cpp_url: str = ""
+
     # Isolated MCP service for tenant-authored Python tools. Empty keeps the
     # feature unavailable until the runner itself is deployed.
     tool_runner_url: str = ""

@@ -23,7 +23,6 @@ from app import chat_runs
 # Shared with app/routes/public_api.py (Chatwoot bridge path) so both callers
 # use the exact same storage/transcription logic instead of duplicating it.
 from app.attachments import store_uploads as _store_uploads
-from app.attachments import transcription_spec as _transcription_spec
 from app.auth import current_user
 from app.config import settings
 from app.db import get_connection
@@ -640,10 +639,6 @@ async def _send_to_skills_agent(
 
 # --- Spec 11 §3: ditado (voz -> texto no campo do chat) ----------------------------------------
 
-_STT_URLS = {
-    "groq": "https://api.groq.com/openai/v1/audio/transcriptions",
-    "openai": "https://api.openai.com/v1/audio/transcriptions",
-}
 MAX_DICTATION_BYTES = 20 * 1024 * 1024
 
 
@@ -654,37 +649,33 @@ class TranscribeBody(BaseModel):
 
 @router.post("/me/transcribe")
 async def transcribe_dictation(body: TranscribeBody, user: dict = Depends(current_user)):
-    """Transcreve um áudio curto com o provedor de voz da empresa (Groq, OpenAI ou compatível)."""
+    """Transcreve áudio curto localmente na Contabo antes de qualquer provedor externo."""
     import base64
 
     require_scope_for_chatwoot(user, "ai.chat.view")
-    spec = _transcription_spec(user["tenant_id"])
-    prov = spec.get("provider")
-    if prov not in ("groq", "openai", "openai-compatible"):
-        raise HTTPException(status_code=409, detail="no_voice_provider")
     try:
         raw = base64.b64decode(body.content_b64, validate=False)
     except ValueError:
         raise HTTPException(status_code=422, detail="Áudio inválido.") from None
     if not raw or len(raw) > MAX_DICTATION_BYTES:
         raise HTTPException(status_code=422, detail="Áudio vazio ou grande demais.")
-    url = (
-        _STT_URLS[prov]
-        if prov in _STT_URLS
-        else spec["api_base"].rstrip("/") + "/audio/transcriptions"
-    )
-    model = str(spec.get("model") or "whisper-1").split("/")[-1]
     ext = "m4a" if "mp4" in body.mime else "webm"
-    async with httpx.AsyncClient(timeout=60.0) as client:
+
+    # whisper.cpp e interno, tem cgroup proprio (3 CPU/3 GB) e nao recebe
+    # token nem audio de outro tenant. Este e o unico fallback usado pela UI
+    # da Spec 12 quando o Whisper WASM do navegador nao estiver disponivel.
+    if settings.whisper_cpp_url:
         try:
-            r = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {spec['api_key']}"},
-                data={"model": model, "language": "pt"},
-                files={"file": (f"voz.{ext}", raw, body.mime.split(";")[0])},
-            )
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(
+                    settings.whisper_cpp_url.rstrip("/") + "/inference",
+                    data={"response_format": "json"},
+                    files={"file": (f"voz.{ext}", raw, body.mime.split(";")[0])},
+                )
         except httpx.HTTPError:
-            raise HTTPException(status_code=502, detail="voice_provider_unreachable") from None
-    if r.status_code != 200:
-        raise HTTPException(status_code=502, detail="voice_provider_error")
-    return {"text": str(r.json().get("text") or "").strip()}
+            raise HTTPException(status_code=502, detail="whisper_cpp_unreachable") from None
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail="whisper_cpp_error")
+        return {"text": str(r.json().get("text") or "").strip()}
+
+    raise HTTPException(status_code=503, detail="whisper_cpp_unavailable")

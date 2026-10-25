@@ -34,6 +34,14 @@ jobs:
           echo "IMAGE_ID=sha256:$(gunzip -c image.tar.gz | tar -xO manifest.json | python3 -c "import sys,json,re;print(re.sub(r'^.*/','',json.load(sys.stdin)[0]['Config']).replace('.json',''))")" >> "$GITHUB_ENV"
           echo "ARCHIVE_SHA=$(sha256sum image.tar.gz | cut -d' ' -f1)" >> "$GITHUB_ENV"
           ls -l image.tar.gz
+      - name: Build do fallback local de ditado
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          docker build -f whisper/Dockerfile -t "agent-platform/whisper-cpp:${V}" .
+          docker save "agent-platform/whisper-cpp:${V}" | gzip -9 > whisper-cpp.tar.gz
+          echo "WHISPER_IMAGE_ID=sha256:$(gunzip -c whisper-cpp.tar.gz | tar -xO manifest.json | python3 -c "import sys,json,re;print(re.sub(r'^.*/','',json.load(sys.stdin)[0]['Config']).replace('.json',''))")" >> "$GITHUB_ENV"
+          echo "WHISPER_ARCHIVE_SHA=$(sha256sum whisper-cpp.tar.gz | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          ls -lh whisper-cpp.tar.gz
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -69,11 +77,30 @@ jobs:
             "resources": {"memory": "1g", "cpus": "1"}
           }
           json.dump(m, open("release-manifest.json", "w"), indent=2)
+          whisper = {
+            "schema": 1,
+            "service": "whisper-cpp",
+            "repo": "RangelTech/luar_engine",
+            "commit": os.environ["GITHUB_SHA"][:7],
+            "version": v,
+            "artifact": {
+              "type": "docker-archive",
+              "asset": "whisper-cpp.tar.gz",
+              "sha256": os.environ["WHISPER_ARCHIVE_SHA"],
+              "image_id": os.environ["WHISPER_IMAGE_ID"],
+              "tag": "agent-platform/whisper-cpp:" + v
+            },
+            "built_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "healthcheck": {"path": "/v1/models", "expect": 200, "timeout_s": 180, "port": 8080},
+            "env": {"required": []},
+            "resources": {"memory": "3g", "cpus": "3"}
+          }
+          json.dump(whisper, open("release-manifest.whisper-cpp.json", "w"), indent=2)
           PY
-          cat release-manifest.json
+          cat release-manifest.json release-manifest.whisper-cpp.json
       - name: GitHub Release com manifesto e imagem
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           V="${{ steps.v.outputs.version }}"
-          gh release create "$V" release-manifest.json image.tar.gz --title "$V" --notes "Artefato docker-archive (sha256 no manifesto). Deploy: somente vps_rt_infra." --target "${GITHUB_SHA}" || gh release upload "$V" release-manifest.json image.tar.gz --clobber
+          gh release create "$V" release-manifest.json release-manifest.whisper-cpp.json image.tar.gz whisper-cpp.tar.gz --title "$V" --notes "Artefatos docker-archive (sha256 nos manifestos). Deploy: somente vps_rt_infra." --target "${GITHUB_SHA}" || gh release upload "$V" release-manifest.json release-manifest.whisper-cpp.json image.tar.gz whisper-cpp.tar.gz --clobber
