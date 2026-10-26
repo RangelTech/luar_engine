@@ -364,7 +364,12 @@ def prepare_harness_run(
             ).fetchall()
         ]
         # Concessões explícitas (tabela) + as implícitas das ferramentas do manifesto.
-        for kind in credential_kinds(manifest["tools"]):
+        kinds = credential_kinds(manifest["tools"])
+        # agente com ambiente ligado roda codigo no workspace: os segredos que ele pedir em `secrets`
+        # viram variaveis de ambiente (mesma regra do rt_env_manage), mesmo sem a ferramenta listada
+        if (manifest.get("environment") or {}).get("enabled") and "secrets" not in kinds:
+            kinds.append("secrets")
+        for kind in kinds:
             if not any(g["kind"] == kind for g in grants):
                 grants.append({"kind": kind, "id": None})
         credentials = _credentials(conn, tenant_id)
